@@ -1,3 +1,5 @@
+let spawn = require('child_process').spawn;
+import path from 'path';
 let argv = require('yargs')
   .usage('Usage: node . -r [repos] -p [paths]')
   .demand(['r'])
@@ -16,25 +18,68 @@ class Application {
     this.repos = repos;
     this.paths = paths;
     this.results = {};
+    this.rootPath = path.join(__dirname, '../');
+  }
+
+  removeClonedRepo(repo) {
+    return new Promise((resolve, reject) => {
+      let child = spawn('rm', ['-rf', `${path.join(this.rootPath, 'repo')}`]);
+
+      this.handleExit(child, resolve, reject, 'Failed to remove cloned repo');
+    });
   }
 
   cloneRepo(repo) {
     return new Promise((resolve, reject) => {
-      console.log(repo);
-      resolve();
+      let cloneRepoPath = path.join(this.rootPath, 'bin/clone-repo');
+
+      let child = spawn(cloneRepoPath, [], {
+        env: {
+          REPO: repo,
+          DIRECTORY: path.join(this.rootPath, 'repo')
+        }
+      });
+
+      this.handleExit(child, resolve, reject, `Failed cloning repo ${repo}`);
     });
   }
 
   countTestCases(repo) {
     return new Promise((resolve, reject) => {
-      this.results.someDate = this.results.someDate && (this.results.someDate + 1) || 0;
-      resolve();
+      let testCounterPath = path.join(this.rootPath, 'bin/count-test-cases');
+      let completedSearches = 0;
+      let handleCompleted = () => {
+        completedSearches++;
+
+        if (completedSearches === this.paths.length) {
+          resolve();
+        }
+      };
+
+      this.paths.forEach((_path) => {
+        let directory = path.join(this.rootPath, 'repo', _path);
+        let child = spawn(testCounterPath, [], {env: {DIRECTORY: directory}});
+        let errorMsg = `Failed cloning repo ${repo}`;
+        let out = '';
+
+        child.stdout.on('data', function (datum) { out += datum; });
+
+        child.stdout.on('end', () => {
+          this.results[(new Date()).getTime()] = out.trim();
+        });
+
+        this.handleExit(child, handleCompleted, reject, errorMsg);
+      });
     });
   }
 
-  removeRepo(repo) {
-    return new Promise((resolve, reject) => {
-      resolve();
+  handleExit(childProcess, resolve, reject, errorMsg) {
+    childProcess.on('exit', function(code) {
+      if (code != 0) {
+        reject(errorMsg);
+      } else {
+        resolve();
+      }
     });
   }
 
@@ -45,10 +90,15 @@ class Application {
       return this.complete();
     }
 
-    this.cloneRepo(nextRepo)
+    this.removeClonedRepo()
+    .then(this.cloneRepo.bind(this, nextRepo))
     .then(this.countTestCases.bind(this))
-    .then(this.removeRepo.bind(this))
+    .catch(this.onError.bind(this))
     .then(this.run.bind(this));
+  }
+
+  onError(error) {
+    throw this.results;
   }
 
   complete() {
