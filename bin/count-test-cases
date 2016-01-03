@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+egrep -o -R "it\(" $DIRECTORY | wc -l
