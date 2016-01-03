@@ -1,5 +1,6 @@
 let spawn = require('child_process').spawn;
 import path from 'path';
+import moment from 'moment';
 let argv = require('yargs')
   .usage('Usage: node . -r [repos] -p [paths]')
   .demand(['r'])
@@ -19,24 +20,25 @@ class Application {
     this.paths = paths;
     this.results = {};
     this.rootPath = path.join(__dirname, '../');
+    this.clonedRepoPath = path.join(this.rootPath, 'repo');
+    this.now = moment(); // Store this so that all repos have same start date
   }
 
   removeClonedRepo(repo) {
     return new Promise((resolve, reject) => {
-      let child = spawn('rm', ['-rf', `${path.join(this.rootPath, 'repo')}`]);
-
+      let child = spawn('rm', ['-rf', `${this.clonedRepoPath}`]);
       this.handleExit(child, resolve, reject, 'Failed to remove cloned repo');
     });
   }
 
   cloneRepo(repo) {
     return new Promise((resolve, reject) => {
-      let cloneRepoPath = path.join(this.rootPath, 'bin/clone-repo');
+      let cloneRepoBinary = path.join(this.rootPath, 'bin/clone-repo');
 
-      let child = spawn(cloneRepoPath, [], {
+      let child = spawn(cloneRepoBinary, [], {
         env: {
           REPO: repo,
-          DIRECTORY: path.join(this.rootPath, 'repo')
+          DIRECTORY: this.clonedRepoPath
         }
       });
 
@@ -44,32 +46,106 @@ class Application {
     });
   }
 
-  countTestCases(repo) {
+  beginIterationOverTime() {
     return new Promise((resolve, reject) => {
-      let testCounterPath = path.join(this.rootPath, 'bin/count-test-cases');
+      this.previousSHA = '';
+
+      this.countTestCases()
+      .then(this.storeTestCount.bind(this, this.now))
+      .then(this.iterateOverTime.bind(this, this.now.clone().startOf('month')))
+      .catch(resolve)
+      .then(resolve);
+    });
+  }
+
+  iterateOverTime(date) {
+    return new Promise((resolve, reject) => {
+      this.findSHAForDate(date)
+      .then(this.checkoutAtSHA.bind(this))
+      .then(this.countTestCases.bind(this))
+      .then(this.storeTestCount.bind(this, date))
+      .then(this.iterateOverTime.bind(this, date.clone().subtract(1, 'month')))
+      .catch(reject);
+    });
+  }
+
+  findSHAForDate(date) {
+    return new Promise((resolve, reject) => {
+      let formatedDate = date.format('YYYY-MM-DD HH:mm');
+      let args = ['rev-list', '-n', 1, `--before="${formatedDate}"`, 'master'];
+
+      let child = spawn('git', args, {cwd: this.clonedRepoPath});
+
+      let out = '';
+      child.stdout.on('data', function (datum) { out += datum; });
+      child.stdout.on('end', () => {
+        if (out.length > 0) {
+          let sha = out.trim();
+
+          // Reject if we found the same sha as before
+          if (sha === this.previousSHA) {
+            return reject();
+          }
+
+          this.previousSHA = sha;
+          resolve(sha);
+        } else {
+          reject();
+        }
+      });
+
+      let errorMsg = `Failed to find sha ${formatedDate}`;
+      this.handleExit(child, () => {}, reject, errorMsg);
+    });
+  }
+
+  checkoutAtSHA(sha) {
+    return new Promise((resolve, reject) => {
+      let child = spawn('git', ['checkout', sha], {
+        cwd: this.clonedRepoPath
+      });
+      this.handleExit(child, resolve, reject, `Failed to checkout at commit.`);
+    });
+  }
+
+  countTestCases() {
+    return new Promise((resolve, reject) => {
+      let testCounterBinary = path.join(this.rootPath, 'bin/count-test-cases');
       let completedSearches = 0;
+      let totalTestCases = 0;
       let handleCompleted = () => {
         completedSearches++;
 
         if (completedSearches === this.paths.length) {
-          resolve();
+          resolve(totalTestCases);
         }
       };
 
       this.paths.forEach((_path) => {
         let directory = path.join(this.rootPath, 'repo', _path);
-        let child = spawn(testCounterPath, [], {env: {DIRECTORY: directory}});
-        let errorMsg = `Failed cloning repo ${repo}`;
+        let child = spawn(testCounterBinary, [], {env: {DIRECTORY: directory}});
+
         let out = '';
-
         child.stdout.on('data', function (datum) { out += datum; });
-
         child.stdout.on('end', () => {
-          this.results[(new Date()).getTime()] = out.trim();
+          totalTestCases += parseInt(out.trim() | 0);
         });
 
-        this.handleExit(child, handleCompleted, reject, errorMsg);
+        this.handleExit(child, handleCompleted, reject, 'Failed to count cases.');
       });
+    });
+  }
+
+  storeTestCount(date, count) {
+    return new Promise((resolve, reject) => {
+      let key = date.unix();
+
+      if (!this.results[key]) {
+        this.results[key] = 0;
+      }
+
+      this.results[key] += count;
+      resolve();
     });
   }
 
@@ -92,7 +168,7 @@ class Application {
 
     this.removeClonedRepo()
     .then(this.cloneRepo.bind(this, nextRepo))
-    .then(this.countTestCases.bind(this))
+    .then(this.beginIterationOverTime.bind(this))
     .catch(this.onError.bind(this))
     .then(this.run.bind(this));
   }
