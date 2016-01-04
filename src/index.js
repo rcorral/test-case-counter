@@ -1,6 +1,8 @@
-let spawn = require('child_process').spawn;
-import path from 'path';
+import debug from 'debug';
+import fs from 'fs';
 import moment from 'moment';
+import path from 'path';
+let spawn = require('child_process').spawn;
 let argv = require('yargs')
   .usage('Usage: node . -r [repos] -p [paths]')
   .demand(['r'])
@@ -13,6 +15,9 @@ let argv = require('yargs')
   .help('h')
   .alias('h', 'help')
   .argv;
+
+let debugLog = debug('app:log');
+let debugError = debug('app:error');
 
 class Application {
   constructor(repos, paths) {
@@ -28,6 +33,7 @@ class Application {
     return new Promise((resolve, reject) => {
       let cloneRepoBinary = path.join(this.rootPath, 'bin/clone-repo');
 
+      debugLog(`cloning ${repo}`);
       let child = spawn(cloneRepoBinary, [], {
         env: {
           REPO: repo,
@@ -43,6 +49,7 @@ class Application {
     return new Promise((resolve, reject) => {
       this.previousSHA = '';
 
+      debugLog('Iterating over time...');
       this.countTestCases()
       .then(this.storeTestCount.bind(this, this.now))
       .then(this.iterateOverTime.bind(this, this.now.clone().startOf('month')))
@@ -67,6 +74,7 @@ class Application {
       let formatedDate = date.format('YYYY-MM-DD HH:mm');
       let args = ['rev-list', '-n', 1, `--before="${formatedDate}"`, 'master'];
 
+      debugLog(formatedDate);
       let child = spawn('git', args, {cwd: this.clonedRepoPath});
 
       let out = '';
@@ -161,16 +169,29 @@ class Application {
 
     this.cloneRepo(nextRepo)
     .then(this.beginIterationOverTime.bind(this))
-    .catch(this.onError.bind(this))
-    .then(this.run.bind(this));
+    .then(this.run.bind(this))
+    .catch(this.onError.bind(this));
   }
 
   onError(error) {
-    throw this.results;
+    debugError(error);
   }
 
   complete() {
-    console.log(this.results);
+    let dates = Object.keys(this.results);
+    let csvHeaders = '';
+    let csvData = '';
+
+    dates.sort().forEach((unix) => {
+      let date = moment.unix(unix);
+      csvHeaders += `${date.format('YYYY-MM-DD')},`;
+      csvData += `${this.results[unix]},`;
+    });
+
+    let data = csvHeaders.substring(0, csvHeaders.length - 1) + "\n" +
+      csvData.substring(0, csvData.length - 1);
+    fs.writeFileSync(path.join(this.rootPath, 'out.csv'), data);
+    debugLog('All Done! Wrote out.csv');
   }
 }
 

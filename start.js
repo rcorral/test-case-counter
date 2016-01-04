@@ -1,3 +1,5 @@
+process.env.DEBUG = process.env.DEBUG || 'app:*';
+
 require('babel-register')({
   'presets': ['es2015']
 });
