@@ -1,1 +1,5 @@
-git clone $REPO $DIRECTORY
+rm -rf $DIRECTORY
+mkdir $DIRECTORY
+cd $DIRECTORY
+git init
+git pull $REPO

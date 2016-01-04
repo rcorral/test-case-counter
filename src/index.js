@@ -8,7 +8,7 @@ let argv = require('yargs')
   .default('p', './')
   .describe('r', 'list of repos')
   .describe('p', 'list of paths')
-  .example('node . -r git@github.com:user/repo.git -p ./tests ./src', 'Will count test cases in two directories')
+  .example('node . -r https://<token>@github.com:user/repo.git -p ./tests ./src', 'Will count test cases in two directories')
   .wrap(null)
   .help('h')
   .alias('h', 'help')
@@ -22,13 +22,6 @@ class Application {
     this.rootPath = path.join(__dirname, '../');
     this.clonedRepoPath = path.join(this.rootPath, 'repo');
     this.now = moment(); // Store this so that all repos have same start date
-  }
-
-  removeClonedRepo(repo) {
-    return new Promise((resolve, reject) => {
-      let child = spawn('rm', ['-rf', `${this.clonedRepoPath}`]);
-      this.handleExit(child, resolve, reject, 'Failed to remove cloned repo');
-    });
   }
 
   cloneRepo(repo) {
@@ -166,8 +159,7 @@ class Application {
       return this.complete();
     }
 
-    this.removeClonedRepo()
-    .then(this.cloneRepo.bind(this, nextRepo))
+    this.cloneRepo(nextRepo)
     .then(this.beginIterationOverTime.bind(this))
     .catch(this.onError.bind(this))
     .then(this.run.bind(this));
